@@ -1,0 +1,162 @@
+---
+title:    "Visualización de datos INE en R"
+author:   "Ignacio Ponsoda & Santiago Mota"
+date:     "`r Sys.Date()`"
+license:  by-nc-sa
+urlcolor: blue
+output:
+  html_document: 
+    theme:        cosmo 
+    highlight:    tango 
+    toc:          true
+    toc_float:    true
+    code_folding: show
+  pdf_document:   default
+  word_document:  default
+---
+
+
+# Visualización de datos INE en R
+
+Juny 16, 2021
+By R on [Ignacio Ponsoda](https://github.com/Ponsoda) & [Santiago Mota](https://github.com/santiagomota)
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introducción
+
+En esta presentacción vamos a aprender como visualizar datos procedentes del INE de una forma dinámica.
+
+Vamos a utilizar datos por distrito censal correspondientes a las edades de los ciudadanos en Madrid, procedentes del [INE](https://www.ine.es/).
+
+```{r Intalacion librerias}
+if(!require("leaflet")) install.packages("leaflet")
+if(!require("sf")) install.packages("sf")
+if(!require("tmap")) install.packages("tamp")
+if(!require("tidyverse")) install.packages("tidyverse")
+```
+
+
+
+```{r Carga librerias}
+library(leaflet)
+library(sf)
+library(tmap)
+library(tidyverse)
+```
+
+## Descarga de archivos
+
+En primer lugar, vamos a descargar los archivos necesarios para la presentación. En este caso se trata de un [shapefile dividido por secciones censales]("https://www.ine.es/censos2011_datos/cartografia_censo2011_nacional.zip") y los [datos del último censo (2011) de Madrid en csv]("https://www.ine.es/censos2011_datos/indicadores_seccion_censal_csv.zip").
+
+Para ello, crearemos dos archivos temporales para cada uno, que nos permitan descargar la información y asignarla a una variable.  
+
+```{r creacion temp}
+temp  <- tempfile()
+temp2 <- tempfile()
+temp3 <- tempfile()
+```
+
+Utilizando estos archivos temporales, descargamos el shapefile (con los temp 1 y 2 y los datos del censo con el temp 3).
+
+Tras descargar el shapefile, utilizamos el read_sf para leer el archivo.
+Por su lado, para el csv, utilizamos el read.table para poder utilizar los datos.
+
+```{r descargas}
+download.file("https://www.ine.es/censos2011_datos/cartografia_censo2011_nacional.zip", temp)
+unzip(zipfile = temp, exdir = temp2)
+shp_file <- list.files(temp2, pattern = ".shp$", full.names = TRUE)
+censales_shp <- sf::read_sf(shp_file)
+
+download.file("https://www.ine.es/censos2011_datos/indicadores_seccion_censal_csv.zip", temp3)
+unzip_temp3 <- unzip(temp3, "C2011_ccaa13_Indicadores.csv")
+datos_temp3 <- read.table(unzip_temp3, header = TRUE, sep = ",")
+```
+
+## Análisis y filtrado de datos
+
+Vamos a observar las primeras líneas de los dos conjuntos de datos
+
+```{r head}
+head(datos_temp3)
+head(censales_shp)
+```
+
+
+Y filtramos los datos por el código de municipio. En este caso, el código de municipio de Madrid es el 28079 (utilizaremos 79 para los datos censales ya que hemos cogido los de la ccaa de Madrid directamente).
+
+```{r filtro}
+madrid_shp <- censales_shp[censales_shp$CUMUN == "28079", ]
+madrid_data <- datos_temp3[datos_temp3$cmun == 79, ]
+```
+
+Utilizamos leaflet para comprobar que los datos de shapefile son correctos. Para ellos tendremos que cambiar la proyección a WGS84.
+
+```{r Previsualizacion datos}
+madrid_shp <- st_transform(madrid_shp, '+proj=longlat +datum=WGS84')
+
+leaflet(madrid_shp) %>%
+  addTiles() %>%
+  addPolygons(weight = 0.5)
+```
+
+## Unión de los datos
+
+En esta sección realizaremos una unión de los dos conjuntos de datos.
+Para ello, tenemos que crear un campo en común en ambos conjuntos, en este caso será la combinación de distrito y sección.
+
+Como los datos del shapefile son strings, utilizaremos el as.numeric y una separación de "-" para crear el **campo join_code**.
+
+```{r Union datos}
+madrid_shp <-transform(madrid_shp, join_code = paste(as.numeric(CDIS), as.numeric(CSEC), sep = "-"))
+madrid_data <-transform(madrid_data, join_code = paste(dist,secc, sep="-"))
+madrid_merged <- merge(madrid_shp,madrid_data, by = "join_code")
+```
+
+## Visualización de datos
+
+```{r Visualizacion datos}
+# Ploteamos el shape con personas menores de 16
+tm_shape(madrid_merged) +
+  tm_polygons("t3_1")
+
+tmap_mode("view")
+
+# y ahora lo vemos interactivo
+tm_shape(madrid_merged) +
+  tm_polygons("t3_1")
+
+# pero son número absolutos, y lo que queremos es ver este dato normalizado por la población
+madrid_merged["under_16"] <- with(madrid_merged, 
+                                  round((t3_1/(t3_1 + t3_2 + t3_3)*100), 2)) 
+madrid_merged["16_64"] <- with(madrid_merged, 
+                                  round((t3_2/(t3_1 + t3_2 + t3_3)*100), 2))
+madrid_merged["over_64"] <- with(madrid_merged, 
+                               round((t3_3/(t3_1 + t3_2 + t3_3)*100), 2)) 
+
+tm_shape(madrid_merged)  +
+  tm_fill(c("under_16", "over_64"), title = c("Población menor de 16 (%)","Población mayor de 64 (%)"), style = "fixed",
+          breaks = c(0, 10, 20, 30, 40, Inf),
+          textNA = "Sin valores", 
+          colorNA = "white",
+          palette = "-viridis",
+          id = "join_code", 
+          popup.vars=c("Jovenes mayores 16 (%)"= "under_16", "Entre 16 y 64 (%)"="16_64", "Mayores de 64 (%)"="over_64"))
+```
+
+## Información de la sesión
+
+```{r}
+sessionInfo()
+```
+
+## Referencias
+
+* [tmap: get started!](https://cran.r-project.org/web/packages/tmap/vignettes/tmap-getstarted.html)
+* [Leaflet for R](https://rstudio.github.io/leaflet/)
+
+## Licencias de uso
+
+* Licencia de uso de los datos del INE. [Link](https://www.ine.es/ss/Satellite?L=0&c=Page&cid=1254735849170&p=1254735849170&pagename=Ayuda%2FINELayout#div_tituloDesplegable12599345159436)
